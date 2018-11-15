@@ -1,0 +1,35 @@
+
+######################################################################
+########################## VARIABLES #################################
+######################################################################
+export STORAGE= # Internal storage drive
+export EXTERNAL= # External HDD
+export BUCKET= # S3 bucket for OS snapshots
+export DEFAULT_USER= # Default username
+
+
+
+
+
+
+
+
+# Path components (directories) of the system to exclude from OS backup routines
+OS_EXCLUDES=()
+while read -a config; do OS_EXCLUDES+=("\"$config\""); done < $(dirname ${BASH_SOURCE[0]})/os_excludes.conf
+export OS_EXCLUDES
+
+# Path components (directories) in a user's home directory to exclude from home directory backup routines
+HOME_EXCLUDES=()
+while read -a config; do HOME_EXCLUDES+=("\"$config\""); done < $(dirname ${BASH_SOURCE[0]})/home_excludes.conf
+export HOME_EXCLUDES
+
+# Path components (directories) of the media directory to exclude from media backup routines
+MEDIA_EXCLUDES=()
+while read -a config; do MEDIA_EXCLUDES+=("\"$config\""); done < $(dirname ${BASH_SOURCE[0]})/media_excludes.conf
+export MEDIA_EXCLUDES
+
+# Directories to check for broken symlinks
+SYMLINKS_CHECK=()
+while read -a config; do SYMLINKS_CHECK+=("\"$config\""); done < $(dirname ${BASH_SOURCE[0]})/symlinks_check.conf
+export SYMLINKS_CHECK

@@ -1,0 +1,622 @@
+#!/bin/bash
+
+
+# Author: Matt Ralston
+# Date: 11/14/18
+# Description:
+# This is a maintenance script performing upgrade, backup, and system maintenance operations for Arch
+
+
+: <<EOF
+
+
+=head1 NAME
+
+curam -- Provides maintenance functions for Arch Linux.
+
+=head1 SYNOPSIS
+
+  curam [OPTIONS] <-t|--task TASK>
+
+=head1 OPTIONS
+
+  -h|--help = This usage.
+  --force = Don't prompt if outstanding system errors found in systemctl
+  -t|--task = one of [news upgrade clean errors backup restore]
+
+=head1 DESCRIPTION
+
+  curam : Arch Linux clean, upgrade, and backup maintenance routines.
+
+=head2 TASKS
+
+=over 4
+
+=item B<-t|--task news>
+
+Fetches news about Arch Linux packages.
+
+=item B<-t|--task upgrade>
+
+Begins by updating the mirrorlist and fetching warnings/news since last upgrade.
+
+Full system upgrade B<pacman -Syu> (B<yaourt -Syu> if available)
+
+Package library rebuild, remove orphaned/dropped packages.
+
+Display I<.pacsave>/I<.pacnew> files and paclog's warnings.
+
+=item B<-t|--task clean>
+
+Pacman cache is cleaned with B<paccache -r>, except 3 recent packages versions.
+
+Locate, report, and remove any broken symlinks in the system.
+
+=item B<-t|--task errors>
+
+The system logs are mined for errors with B<journalctl -p 3 -xb>
+
+System daemon launch failures shown with B<systemctl --failed>
+
+=item B<-t|--task backup>
+
+OS, user home, and media rsync backup to B<$BACKUP_LOCATION/backups/current>
+
+.tar.gz snapshot of current, saved to B<$BACKUP_LOCATION/backups/tarballs>
+
+S3 sync snapshots to s3://$BUCKET, using B<$DEFAULT_USER> B<~/.aws/credentials>
+
+Run as root user, preserves permissions of files, and media.
+
+=item B<-t|--task restore>
+
+Rsync restore of B<$BACKUP_LOCATION/backups/current> backup in B<--dry-run>
+
+NOTE: This feature is experimental and catastrophic. Always restore manually.
+
+=item B<-t|--task config>
+
+Print configurations from I<etc/curam/>
+
+=back
+
+=head2 CONFIGURATION
+
+=over 4
+
+=item B<$STORAGE>
+
+Defined in I<etc/curam/curam.conf>
+
+Primary storage location for a 'current' rsync snapshot and tarballs
+
+=item B<$EXTERNAL>
+
+Defined in I<etc/curam/curam.conf>
+
+An external HDD or location for media and home directory backups
+
+=item B<$BUCKET>
+
+Defined in I<etc/curam/curam.conf>
+
+Destination S3 bucket for tarballs. Omits the s3:// prefix
+
+e.g. STORAGE=my-personal-snapshots (not s3://my-personal-snapshots)
+
+=item B<$DEFAULT_USER>
+
+Defined in I<etc/curam/curam.conf>
+
+User to default to and refer to during backup routines.
+
+This user should have AWS credentials defined in I<$HOME/.aws/credentials>
+
+=item B<$OS_EXCLUDES>
+
+Defined in I<etc/curam/os_excludes.conf> (Remember the trailing \n)
+
+A list of paths to pass to B<rsync> with B<--exclude=...>
+
+These are OS path components to exclude from the operating system backup.
+
+Good choices are personal directories, media libraries, and large datasets
+
+=item B<$HOME_EXCLUDES>
+
+Defined in I<etc/curam/home_excludes.conf> (Remember the trailing \n)
+
+A list of path components to exclude from the home directory backup.
+
+Good choices are subdirectories in I<~/.cache>, I<~/.config>, etc.
+
+=item B<$MEDIA_EXCLUDES>
+
+Defined in I<etc/curam/media_excludes.conf> (Remember the trailing \n)
+
+A list of path components to exclude from media directory backup.
+
+No defaults. Depends on your organization of your media library.
+
+=item B<$SYMLINKS_CHECK>
+
+Defined in I<etc/curam/symlinks_check.conf> (Remember the trailing \n)
+
+A list of directories to recur into while searching for broken symlinks.
+
+
+=back
+
+=head1 AUTHOR
+
+  Current maintainer: Matthew Ralston <mrals89@gmail.com>
+
+
+=head1 LICENSE AND COPYRIGHT
+
+    This file is part of curam
+
+    curam is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    curam is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with curam.  If not, see <https://www.gnu.org/licenses/>.
+
+=cut
+
+
+EOF
+
+
+######################################################################
+########################## VARIABLES #################################
+######################################################################
+
+
+VERSION=0.0.1
+HELP=0
+
+# This script doesn't should largely not be run as root, except for cronjobs
+if [[ $EUID -ne 0 ]]; then export USER=$(whoami); else export USER=$DEFAULT_USER; fi
+if [[ $EUID -ne 0 ]]; then export GROUP=$(id -gn); else export GROUP=$(id -gn $DEFAULT_USER); fi
+FORCE=0 # This variable controls behavior of forcing system upgrade instead of prompting in the case of system backup
+# script resides in usr/bin, configs in ../../etc/curam/
+CONFIG=$(dirname $0)/../../etc/curam/curam.conf
+if [ ! -f $CONFIG ]; then
+    echo "curam configuration file '$CONFIG' not found. Exiting..." >&2
+    exit 1
+fi
+source $CONFIG # Source user variables
+
+
+# script resides in usr/bin, manpage in ../share/man/
+MANPAGE=$(dirname $0)/../share/man/curam.1
+if [ ! -f $MANPAGE ]; then
+    echo "curam man page '$MANPAGE' not found. Exiting..." >&2
+    exit 1
+fi
+
+#################
+# Check variables
+#################
+if [[ -z ${STORAGE} ]]; then echo "The storage location for OS backups 'STORAGE' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+if [[ -z ${EXTERNAL} ]]; then echo "The external HDD (media and home directory backups) 'EXTERNAL' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+if [[ -z ${BUCKET} ]]; then echo "The S3 bucket for snapshots 'BUCKET' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+if [[ -z ${DEFAULT_USER} ]]; then echo "The default user 'DEFAULT_USER' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+
+
+
+#######################################################################
+####################### Function Definitions ##########################
+#######################################################################
+
+print_config() {
+    echo "Printing configuration from '$CONFIG'... "
+    echo
+    echo
+    echo "Storage: $STORAGE"
+    echo "External HDD: $EXTERNAL"
+    echo "BUCKET: $BUCKET"
+    echo "DEFAULT_USER: $DEFAULT_USER"
+    echo "OS_EXCLUDES: ${OS_EXCLUDES[*]}"
+    echo "HOME_EXCLUDES: ${HOME_EXCLUDES[*]}"
+    echo "MEDIA_EXCLUDES: ${MEDIA_EXCLUDES[*]}"
+    echo "SYMLINKS_CHECK: ${SYMLINKS_CHECK[*]}"
+}
+
+
+arch_news() {
+    /usr/bin/python3 $(dirname ${BASH_SOURCE[0]})/../lib/curam/archNews.py
+    return "$?"
+}
+
+fetch_warnings() {
+    echo "\nChecking Arch Linux news for warnings..." >&2
+    last_upgrade=$(sed -n '/pacman -Syu/h; ${x;s/.\([0-9-]*\).*/\1/p;}' /var/log/pacman.log)
+
+    if [[ -n "$last_upgrade" ]]; then
+	/usr/bin/python3 $(dirname ${BASH_SOURCE[0]})/../lib/curam/archNews.py "$last_upgrade"
+    else
+	/usr/bin/python3 $(dirname ${BASH_SOURCE[0]})/../lib/curam/archNews.py
+    fi
+    alerts="$?"
+
+    if [[ "$alerts" == 1 ]]; then
+	echo "\n\nWARNING: This upgrade requires out-of-the-ordinary user intervention for system upgrade" >&2
+	echo "Re-run this command after resolving the above issue(s)" >&2
+	exit 1
+    else
+	echo "...Check complete! No warnings found!" >&2
+    fi
+}
+
+update_mirrorlist() {
+    echo "Updating mirrorlist..." >&2
+    reflector --country "$MIRRORLIST_COUNTRY" --latest 200 --age 24 --sort rate --save /etc/pacman.d/mirrorlist
+    echo "...Update complete! Mirrorlist updated" >&2
+}
+
+aur_setup() {
+    echo "Setting up build directory at '$AUR_DIR'..." >&2
+    if [[ ! -d "$AUR_DIR" ]]; then
+	mkdir "$AUR_DIR"
+    fi
+    chgrp nobody "$AUR_DIR"
+    chmod g+ws "$AUR_DIR"
+    setfacl -d --set u::rwx,g::rx,o::rx "$AUR_DIR"
+    setfacl -m u::rwx,g::rwx,o::- "$AUR_DIR"
+    echo "AUR build directory setup complete!" >&2
+}
+
+rebuild_aur() {
+    if sudo -u nobody bash -c "[[ -w $AUR_DIR ]]"; then
+	echo "Rebuilding AUR packages..." >&2
+	if [[ -n "$(/bin/ls -A $AUR_DIR)" ]]; then
+	    starting_dir="$(pwd)"
+	    for aur_pkg in $AUR_DIR/*/; do
+		if [[ -d "$aur_pkg" ]]; then
+		    if sudo -u nobody bash -c "[[ ! -w $aur_pkg ]]"; then
+			chmod -R g+w "$aur_pkg"
+		    fi
+		    cd "$aur_pkg"
+		    git pull origin master
+		    source PKGBUILD
+		    pacman -S --needed --asdeps "${depends[@]}" "${makedepends[@]}" --noconfirm
+		    sudo -u nobody makepkg -fc --noconfirm
+		    pacman -U "$(sudo -u nobody makepkg --packagelist)" --noconfirm
+		fi
+	    done
+	    cd $starting_dir
+	    echo "\n\nFinished rebuilding AUR packages" >&2
+	else
+	    echo "...No AUR packages in '$AUR_DIR'" >&2
+	    exit 1
+	fi
+    else
+	echo "AUR package directory not set up"
+	aur_setup
+	rebuild_aur
+    fi
+}
+
+remove_orphaned() {
+    echo "\nChecking for orphaned packages..." >&2
+    mapfile -t orphaned < <(pacman -Qtdq)
+    if [[ ${orphaned[*]} ]]; then
+	echo "\n\nORPHANED PACKAGES FOUND:" >&2
+	printf '%s\n' "${orphaned[@]}" >&2
+	echo "Removing orphaned packages..." >&2
+	pacman -Rns --noconfirm ${orphaned[*]}
+    else
+	echo "No orphaned packages found!" >&2
+    fi
+}
+
+remove_dropped() {
+    echo "\nChecking for dropped packages..." >&2
+    if [[ -n "${AUR_DIR/[ ]*\n/}" ]]; then
+	aur_list="maint"
+	for aur_pkg in "$AUR_DIR"/*/; do
+	    if [[ -d "$aur_pkg" ]]; then
+		aur_list="$aur_list|$(basename $aur_pkg)"
+	    fi
+	done
+	mapfile -t dropped < <(awk "!/${aur_list}/" <(pacman -Qmq))
+    else
+	mapfile -t dropped < <(pacman -Qmq)
+    fi
+
+    if [[ ${dropped[*]} ]]; then
+	echo "\n\nDROPPED PACKAGES FOUND:" >&2
+	printf '%s\n' "${dropped[@]}" >&2
+	echo "Removing dropped packages..." >&2
+	pacman -Rns --noconfirm ${dropped[*]}
+    else
+	echo "No dropped packages found!" >&2
+    fi
+}
+
+handle_pacfiles() {
+    echo "\nChecking for pacfiles..." >&2
+    pacdiff
+    echo "Done checking for pacfiles!" >&2
+}
+
+upgrade_warnings() {
+    echo "Checking for upgrade warnings..." >&2
+    last_upgrade="$(sed -n '/pacman -Syu/h; ${x;s/.\([0-9-]*\).*/\1/p;}' /var/log/pacman.log)"
+    if [[ -n "$last_upgrade" ]]; then
+	paclog --after="$last_upgrade" | paclog --warnings
+    fi
+    echo "Done checking for upgrade warnings!" >&2
+}
+
+clean_cache() {
+    echo "Cleaning up the package cache..." >&2
+    paccache -r
+    echo "Done cleaning up the package cache!" >&2
+}
+
+clean_symlinks() {
+    if [[ "$EUID" -ne 0 ]]; then
+	echo "clean_symlinks must be run as root."
+	exit 1
+    else
+	if [[ -z ${SYMLINKS_CHECK[*]+x} ]]; then echo "The list of symlink locations to check 'SYMLINKS_CHECK' was not set. Exiting" >&2; exit 1; fi
+	echo "Checking for broken symlinks..." >&2
+	mapfile -t broken_symlinks < <(find ${SYMLINKS_CHECK[*]} -xtype l -print)
+	if [[ ${broken_symlinks[*]} ]]; then
+	    echo "BROKEN SYMLINKS FOUND:" >&2
+	    printf '%s\n' "${broken_symlinks[@]}" >&2
+	    echo "Removing broken symlinks..." >&2
+	    find ${SYMLINKS_CHECK[*]} -xtype l -delete
+	else
+	    echo "No broken symlinks found!" >&2
+	fi
+    fi
+}
+
+failed_services() {
+    echo "Checking for failed system services:" >&2
+    systemctl --failed
+    systemctl --failed | grep failed > /dev/null
+    if [ $? -eq 0 ]; then
+	# Grep found 'failed', failed processes exist. Return 1
+	return 1
+    else
+	# Grep didn't find 'failed', no failed processes exist. Return 0
+	return 0
+    fi
+}
+
+journal_errors() {
+    echo "High priority systemd journal errors:" >&2
+    journalctl -p 3 -xb
+}
+
+upgrade_system() {
+    echo "Performing full system upgrade..." >&2
+    pacman -Syu
+    if [ -x "$(yaourt --version)" ]; then
+	yaourt -Syu
+    fi
+}
+
+os_backup() {
+    if [[ "$EUID" -ne 0 ]]; then
+	echo "OS backup must be run as root. It preserves privileges appropriately" >&2
+	exit 1
+    else
+	if [ -z ${OS_EXCLUDES+x} ]; then echo "The list of excludes 'OS_EXCLUDES' for os backup rsync was not set. Exiting" >&2; exit 1; fi
+	if [ -z ${STORAGE+x} ]; then echo "The bulk storage location 'STORAGE' was not set for os backup. Exiting" >&2; exit 1; fi
+	if [ -z ${BUCKET+x} ]; then echo "The S3 bucket 'BUCKET' was not set for os backup. Exiting" >&2; exit 1; fi
+	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for os backup. Exiting" >&2; exit 1; fi
+	if [ -z ${GROUP+x} ]; then echo "The default groupname 'GROUP' was not set for os backup. Exiting" >&2; exit 1; fi
+	echo "Creating OS backup..." >&2
+	os_excludes=$(echo "${OS_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
+	cmd="rsync -aAXHS --info=progress2 --exclude={$os_excludes} / $STORAGE/backups/current/"
+	echo $cmd >&2
+	eval $cmd
+	DATE=$(date +"%Y%m%d_%H%M")
+	tarball=$STORAGE/backups/tarballs/backups-$DATE.tar.gz
+	echo "Archiving 'current' snapshot..." >&2
+	cmd="tar -xattrs -czvf $tarball $STORAGE/backups/current/"
+	
+	echo $cmd >&2
+	eval $cmd
+	chown $USER:$GROUP $tarball
+	echo "Syncing to S3..." >&2
+	su -l $USER -c "aws s3 sync $STORAGE/backups/tarballs/ s3://$BUCKET --metadata Backups=Arch"
+	echo "\n\nOS Backup complete!" >&2
+    fi
+}
+
+home_backup() {
+    if [[ "$EUID" -ne 0 ]]; then
+	echo "Home backup must be run as root. It preserves priveleges for '$USER' appropriately" >&2
+	exit 1
+    else
+	if [ -z ${HOME_EXCLUDES+x} ]; then echo "The list of excludes 'HOME_EXCLUDES' for home backup rsync was not set. Exiting" >&2; exit 1; fi
+	if [ -z ${EXTERNAL+x} ]; then echo "The bulk storage location 'STORAGE' was not set for home backup. Exiting" >&2; exit 1; fi
+	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for home backup. Exiting" >&2; exit 1; fi
+
+	echo "Creating home backup..." >2
+	home_excludes=$(echo "${HOME_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
+	cmd="rsync -aAXHS --info=progress2 --exclude={$home_excludes} /home/$USER $EXTERNAL/home/"
+	echo $cmd >&2
+	su -l $USER -c $cmd
+	echo "\n\nHome backup complete!" >&2
+    fi
+}
+
+media_backup() {
+    if [[ "$EUID" -ne 0 ]]; then
+	echo "Media backup must be run as root. It sets priveleges for '$USER' appropriately" >&2
+	exit 1
+    else
+	if [ -z ${MEDIA_EXCLUDES+x} ]; then echo "The list of excludes 'HOME_EXCLUDES' for media backup rsync was not set. Exiting" >&2; exit 1; fi
+	if [ -z ${EXTERNAL+x} ]; then echo "The bulk storage location 'STORAGE' was not set for media backup. Exiting" >&2; exit 1; fi
+	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for media backup. Exiting" >&2; exit 1; fi
+	if [ -z ${STORAGE+x} ]; then echo "The bulk storage location 'STORAGE' was not set for media backup. Exiting" >&2; exit 1; fi
+
+	echo "Creating media backup..." >&2
+	media_excludes=$(echo "${MEDIA_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
+	cmd="rsync -aAXv --info=progress2 --excludes={$media_excludes} $STORAGE/media $EXTERNAL/media"
+	echo $cmd >&2
+	su -l $USER -c $cmd
+	echo "\n\nMedia backup complete!" >&2
+    fi
+}
+
+execute_restore() {
+    if [[ "$EUID" -ne 0 ]]; then
+	echo "System restore must be run as root. This would hose the whole system. Good thing it's dry-run only!" >&2
+	exit 1
+    else
+	if [ -z ${MEDIA_EXCLUDES+x} ]; then echo "The list of excludes 'HOME_EXCLUDES' for system restore was not set. Exiting" >&2; exit 1; fi
+	if [ -z ${STORAGE+x} ]; then echo "The bulk storage location 'STORAGE' was not set for system restore. Exiting" >&2; exit 1; fi
+
+	os_excludes=$(echo "${OS_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
+	read -r -p "Do you want to restore the system from the image located at $BACKUP_LOCATION? [y/N]"
+	if [[ "$REPLY" == "y" ]]; then
+	    # THIS IS CURRENTLY DISABLED
+	    rsync -aAXHS --dry-run --info=progress2 --delete --exclude={$os_excludes} $STORAGE/backups/current/ /
+	fi
+    fi
+}
+
+
+#######################################################################
+####################### Menu Option Definitions #######################
+#######################################################################
+
+fetch_news() {
+    arch_news
+}
+
+system_upgrade() {
+    update_mirrorlist
+    fetch_warnings
+    upgrade_system
+    rebuild_aur
+    remove_orphaned
+    remove_dropped
+    handle_pacfiles
+    upgrade_warnings
+}
+
+system_clean() {
+
+    clean_cache
+    clean_symlinks
+}
+
+system_errors() {
+    	journal_errors # Possible to ignore
+	failed_services
+	if [ $? -ne 0 ]; then
+	    echo "One or more systemd services are not function properly. Highly recommended that you fix the services before proceeding..." >&2
+	    return 1
+	fi
+}
+
+backup_system() {
+    if [[ $EUID -ne 0 ]];
+    then
+	exec sudo /bin/bash "$0" "$@"
+    else
+	echo "Setting default user to 'matt'" >&2
+    fi
+    system_clean
+    failed_services
+    if [ $? -ne 0 ] && [ $FORCE -eq 0 ]; then
+	# Errors were found during system_errors, in the absence of the force flag, exit
+	exit 1
+    fi
+    os_backup
+    home_backup
+    media_backup
+
+}
+
+restore_system() {
+    echo "\n\n\nW A R N I N G :   D R Y   R U N   O N L Y ! ! ! \n\n" >&2
+    if [[ $EUID -ne 0 ]];
+    then
+	exec sudo /bin/bash "$0" "$@"
+    else
+	echo "Setting default user to 'matt'" >&2
+    fi
+    execute_restore
+}
+
+script_exit() {
+    echo "\n\nTask undefined!!\nExiting" >&2
+    exit 1
+}
+
+
+
+if [ $# -eq 0 ] # Print the help message if no arguments are provided
+then
+    HELP=1
+fi
+
+
+#######################################################################
+####################### Option Parser #################################
+#######################################################################
+
+
+if [[ $# > 0 ]]; then
+    key="$1"
+    case $key in
+	-h|--help)
+	HELP=1
+	;;
+
+	-t|--task)
+	TASK="$2"
+	shift
+	;;
+
+	--force)
+	FORCE=1
+	;;    
+
+	*)
+	echo "Unknown option: $key"
+	exit 1
+	;;
+    esac
+    shift
+fi
+
+if [ $HELP == 1 ]; then
+    man $MANPAGE
+    exit 1
+fi
+
+
+
+#######################################################################
+####################### Menu Option Definitions #######################
+#######################################################################
+
+case $TASK in
+    news) fetch_news;;
+    upgrade) system_upgrade;;
+    clean) system_clean;;
+    errors) system_errors;;
+    backup) backup_system;;
+    restore) restore_system;;
+    config) print_config;;
+    *) script_exit;;
+esac

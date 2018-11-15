@@ -1,0 +1,78 @@
+
+
+VERSION       = $(shell git rev-parse --short HEAD)
+DESTDIR       =
+PREFIX        = /usr
+SHELL         = /bin/bash
+INSTALL       = /usr/bin/env install
+MSGFMT        = /usr/bin/msgfmt
+SED           = /bin/sed
+PKGNAME	      = arch_maint
+bindir        = $(PREFIX)/bin
+libdir        = $(PREFIX)/lib
+sysconfdir    = etc
+completiondir = ${PREFIX}/share/bash-completion/completions
+localedir     = $(PREFIX)/share/locale
+localstatedir = $(PREFIX)/var
+mandir        = $(PREFIX)/share/man
+
+
+
+all:
+	clean
+	install
+	dist
+
+manpage: man/$(PKGNAME).1
+
+
+
+docs: Makefile bin/arch_maint
+	pod2man bin/arch_maint man/arch_maint.1
+
+
+install: $(SCRIPTS) docs
+	$(INSTALL) -d $(DESTDIR)$(bindir)
+	$(INSTALL) -d $(DESTDIR)$(libdir)/$(PKGNAME)
+	$(INSTALL) -d $(DESTDIR)/$(sysconfdir)/$(PKGNAME)
+	$(INSTALL) -d $(DESTDIR)$(completiondir)
+	$(INSTALL) -d $(mandir)/man1
+	# Scripts
+	$(INSTALL) -m755 arch_maint $(DESTDIR)$(bindir)/arch_maint
+	# Libs
+	$(INSTALL) -m644 lib/$(PKGNAME)/archNews.py $(DESTDIR)$(libdir)/archNews.py
+	# Man
+	$(INSTALL) -m644 $(manpage) $(DESTDIR)$(mandir)/$(PKGNAME).1
+	# Config files
+	$(INSTALL) -m644 etc/$(PKGNAME)/arch_maint.conf.defaults $(DESTDIR)/$(sysconfdir)/arch_maint.conf.defaults
+	$(INSTALL) -m644 etc/$(PKGNAME)/arch_maint.conf.defaults $(DESTDIR)/$(sysconfdir)/arch_maint.conf
+	$(INSTALL) -m644 etc/$(PKGNAME)/home_excludes.conf.defaults $(DESTDIR)/$(sysconfdir)/home_excludes.conf.defaults
+	$(INSTALL) -m644 etc/$(PKGNAME)/home_excludes.conf.defaults $(DESTDIR)/$(sysconfdir)/home_excludes.conf
+	$(INSTALL) -m644 etc/$(PKGNAME)/media_excludes.conf.defaults $(DESTDIR)/$(sysconfdir)/media_excludes.conf.defaults
+	$(INSTALL) -m644 etc/$(PKGNAME)/media_excludes.conf.defaults $(DESTDIR)/$(sysconfdir)/media_excludes.conf
+	$(INSTALL) -m644 etc/$(PKGNAME)/os_excludes.conf.defaults $(DESTDIR)/$(sysconfdir)/os_excludes.conf.defaults
+	$(INSTALL) -m644 etc/$(PKGNAME)/os_excludes.conf.defaults $(DESTDIR)/$(sysconfdir)/os_excludes.conf
+	$(INSTALL) -m644 etc/$(PKGNAME)/symlinks_check.conf.defaults $(DESTDIR)/$(sysconfdir)/symlinks_check.conf.defaults
+	$(INSTALL) -m644 etc/$(PKGNAME)/symlinks_check.conf.defaults $(DESTDIR)/$(sysconfdir)/symlinks_check.conf
+
+dist:
+	mkdir $(PKGNAME)-$(VERSION)
+	cp -r AUTHORS bin etc INSTALL lib LICENSE Makefile man $(PKGNAME)-$(VERSION)
+	tar -zcvf $(PKGNAME)-$(VERSION).tar.gz $(PKGNAME)-$(VERSION)
+	rm -rf $(PKGNAME)-$(VERSION)
+
+
+clean:
+	rm -f $(PKGNAME)-$(VERSION).tar.gz
+	rm -rf $(PKGNAME)-$(VERSION)
+
+.PHONY: all install clean dist
+
+
+
+
+
+
+
+
+

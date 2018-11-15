@@ -1,0 +1,7 @@
+src/etc/curam/curam.conf
+src/etc/curam/os_excludes.conf
+src/etc/curam/home_excludes.conf
+
+*~
+*#
+#*
