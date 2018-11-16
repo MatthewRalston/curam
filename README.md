@@ -2,6 +2,13 @@
 
 curam : a utility for system maintenance for Arch Linux
 
+## Install
+
+```bash
+yaourt -S curam-git
+```
+
+
 ## Build
 
 ```bash

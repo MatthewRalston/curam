@@ -188,20 +188,14 @@ if [[ $EUID -ne 0 ]]; then export USER=$(whoami); else export USER=$DEFAULT_USER
 if [[ $EUID -ne 0 ]]; then export GROUP=$(id -gn); else export GROUP=$(id -gn $DEFAULT_USER); fi
 FORCE=0 # This variable controls behavior of forcing system upgrade instead of prompting in the case of system backup
 # script resides in usr/bin, configs in ../../etc/curam/
-CONFIG=$(dirname $0)/../../etc/curam/curam.conf
-if [ ! -f $CONFIG ]; then
-    echo "curam configuration file '$CONFIG' not found. Exiting..." >&2
-    exit 1
-fi
+CONFIG=$(dirname $0)/../etc/curam/curam.conf
+if [ ! -f $CONFIG ]; then echo "curam configuration file '$CONFIG' not found. Exiting..." >&2; exit 1; fi
 source $CONFIG # Source user variables
 
 
 # script resides in usr/bin, manpage in ../share/man/
-MANPAGE=$(dirname $0)/../share/man/curam.1
-if [ ! -f $MANPAGE ]; then
-    echo "curam man page '$MANPAGE' not found. Exiting..." >&2
-    exit 1
-fi
+MANPAGE=$(dirname $0)/../man/curam.1
+if [ ! -f $MANPAGE ]; then echo "curam man page '$MANPAGE' not found. Exiting..." >&2; exit 1; fi
 
 #################
 # Check variables
