@@ -197,15 +197,6 @@ source $CONFIG # Source user variables
 MANPAGE=$(dirname $0)/../man/curam.1
 if [ ! -f $MANPAGE ]; then echo "curam man page '$MANPAGE' not found. Exiting..." >&2; exit 1; fi
 
-#################
-# Check variables
-#################
-if [[ -z ${STORAGE} ]]; then echo "The storage location for OS backups 'STORAGE' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-if [[ -z ${EXTERNAL} ]]; then echo "The external HDD (media and home directory backups) 'EXTERNAL' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-if [[ -z ${BUCKET} ]]; then echo "The S3 bucket for snapshots 'BUCKET' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-if [[ -z ${DEFAULT_USER} ]]; then echo "The default user 'DEFAULT_USER' was not set."; echo "Run '-t config' to print configuration."; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-
-
 
 #######################################################################
 ####################### Function Definitions ##########################
@@ -219,10 +210,10 @@ print_config() {
     echo "External HDD: $EXTERNAL"
     echo "BUCKET: $BUCKET"
     echo "DEFAULT_USER: $DEFAULT_USER"
-    echo "OS_EXCLUDES: ${OS_EXCLUDES[*]}"
-    echo "HOME_EXCLUDES: ${HOME_EXCLUDES[*]}"
-    echo "MEDIA_EXCLUDES: ${MEDIA_EXCLUDES[*]}"
-    echo "SYMLINKS_CHECK: ${SYMLINKS_CHECK[*]}"
+    echo "OS_EXCLUDES: '${OS_EXCLUDES[*]}'"
+    echo "HOME_EXCLUDES: '${HOME_EXCLUDES[*]}'"
+    echo "MEDIA_EXCLUDES: '${MEDIA_EXCLUDES[*]}'"
+    echo "SYMLINKS_CHECK: '${SYMLINKS_CHECK[*]}'"
 }
 
 
@@ -427,7 +418,7 @@ os_backup() {
 	eval $cmd
 	chown $USER:$GROUP $tarball
 	echo "Syncing to S3..." >&2
-	su -l $USER -c "aws s3 sync $STORAGE/backups/tarballs/ s3://$BUCKET --metadata Backups=Arch"
+	su -l $USER -c "/usr/bin/aws s3 sync $STORAGE/backups/tarballs/ s3://$BUCKET --metadata Backups=Arch"
 	echo "\n\nOS Backup complete!" >&2
     fi
 }
@@ -604,13 +595,30 @@ fi
 ####################### Menu Option Definitions #######################
 #######################################################################
 
-case $TASK in
-    news) fetch_news;;
-    upgrade) system_upgrade;;
-    clean) system_clean;;
-    errors) system_errors;;
-    backup) backup_system;;
-    restore) restore_system;;
-    config) print_config;;
-    *) script_exit;;
-esac
+if [ $TASK == config ]; then
+    print_config
+else
+    #####################
+    # Check configuration
+    #####################
+    # Storage should be a directory
+    if [[ -z ${STORAGE} ]] && [[ -d $STORAGE ]]; then echo "The storage location for OS backups 'STORAGE' was not set or does not exist." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${EXTERNAL} ]] && [[ -d $EXTERNAL ]]; then echo "The external HDD (media and home directory backups) 'EXTERNAL' was not set or does not exist." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${BUCKET} ]] && [[ $(/usr//bin/aws s3 ls s3://$BUCKET 2>/dev/null) ]]; then echo "The S3 bucket for snapshots 'BUCKET' was not set or does not exist." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${DEFAULT_USER} ]] && [[ $(id -u $DEFAULT_USER 2> /dev/null) ]]; then echo "The default user 'DEFAULT_USER' was not set or does not exist." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${OS_EXCLUDES[*]+x} ]] && [[ ${#OS_EXCLUDES[@]} -ne 0 ]]; then echo "The list of rsync excludes 'OS_EXCLUDES' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${HOME_EXCLUDES[*]+x} ]] && [[ ${#HOME_EXCLUDES[@]} -ne 0 ]]; then echo "The list of rsync excludes 'HOME_EXCLUDES' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${MEDIA_EXCLUDES[*]+x} ]] && [[ ${#MEDIA_EXCLUDES[@]} -ne 0 ]]; then echo "The list of rsync excludes 'MEDIA_EXCLUDES' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    if [[ -z ${SYMLINKS_CHECK[*]+x} ]] && [[ ${#SYMLINKS_CHECK[@]} -ne 0 ]]; then echo "The list of directories to search for broken symlinks, 'SYMLINKS_CHECK' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+
+
+    case $TASK in
+	news) fetch_news;;
+	upgrade) system_upgrade;;
+	clean) system_clean;;
+	errors) system_errors;;
+	backup) backup_system;;
+	restore) restore_system;;
+	*) script_exit;;
+    esac
+fi
