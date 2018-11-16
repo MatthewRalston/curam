@@ -285,7 +285,7 @@ rebuild_aur() {
 	    exit 1
 	fi
     else
-	echo "AUR package directory not set up"
+	echo "AUR package directory not set up" >&2
 	aur_setup
 	rebuild_aur
     fi
@@ -293,7 +293,10 @@ rebuild_aur() {
 
 remove_orphaned() {
     echo "\nChecking for orphaned packages..." >&2
-    mapfile -t orphaned < <(pacman -Qtdq)
+    orphaned=()
+    for x in $(pacman -Qtdq); do
+	orphaned+=($x)
+    done
     if [[ ${orphaned[*]} ]]; then
 	echo "\n\nORPHANED PACKAGES FOUND:" >&2
 	printf '%s\n' "${orphaned[@]}" >&2
@@ -313,9 +316,15 @@ remove_dropped() {
 		aur_list="$aur_list|$(basename $aur_pkg)"
 	    fi
 	done
-	mapfile -t dropped < <(awk "!/${aur_list}/" <(pacman -Qmq))
+	dropped=()
+	for x in $(awk "!/${aur_list}/" <(pacman -Qmq)); do
+	    dropped+=($x)
+	done
     else
-	mapfile -t dropped < <(pacman -Qmq)
+	dropped=()
+	for x in $(pacman -Qmq); do
+	    dropped+=($x)
+	done
     fi
 
     if [[ ${dropped[*]} ]]; then
@@ -355,13 +364,18 @@ clean_symlinks() {
 	exit 1
     else
 	if [[ -z ${SYMLINKS_CHECK[*]+x} ]]; then echo "The list of symlink locations to check 'SYMLINKS_CHECK' was not set. Exiting" >&2; exit 1; fi
-	echo "Checking for broken symlinks..." >&2
-	mapfile -t broken_symlinks < <(find ${SYMLINKS_CHECK[*]} -xtype l -print)
-	if [[ ${broken_symlinks[*]} ]]; then
+	echo "Checking for broken symlinks in the following directories..." >&2
+	echo ${SYMLINKS_CHECK[*]} >&2
+	broken_symlinks=()
+	for x in $(for dir in ${SYMLINKS_CHECK[@]}; do find $(echo $dir | sed 's/"//g') -xtype l -print 2> /dev/null; done); do
+	    broken_symlinks+=($x)
+	done
+	echo ${broken_symlinks[*]} >&2
+	if [[ ${#broken_symlinks[@]} -ne 0 ]]; then
 	    echo "BROKEN SYMLINKS FOUND:" >&2
 	    printf '%s\n' "${broken_symlinks[@]}" >&2
 	    echo "Removing broken symlinks..." >&2
-	    find ${SYMLINKS_CHECK[*]} -xtype l -delete
+	    find ${broken_symlinks[*]} -xtype l -delete
 	else
 	    echo "No broken symlinks found!" >&2
 	fi
@@ -432,7 +446,7 @@ home_backup() {
 	if [ -z ${EXTERNAL+x} ]; then echo "The bulk storage location 'STORAGE' was not set for home backup. Exiting" >&2; exit 1; fi
 	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for home backup. Exiting" >&2; exit 1; fi
 
-	echo "Creating home backup..." >2
+	echo "Creating home backup..." >&2
 	home_excludes=$(echo "${HOME_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
 	cmd="rsync -aAXHS --info=progress2 --exclude={$home_excludes} /home/$USER $EXTERNAL/home/"
 	echo $cmd >&2
@@ -577,7 +591,7 @@ if [[ $# > 0 ]]; then
 	;;    
 
 	*)
-	echo "Unknown option: $key"
+	echo "Unknown option: $key" >&2
 	exit 1
 	;;
     esac
