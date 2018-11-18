@@ -133,7 +133,7 @@
 .\" ========================================================================
 .\"
 .IX Title "CURAM 1"
-.TH CURAM 1 "2018-11-16" "perl v5.28.0" "User Contributed Perl Documentation"
+.TH CURAM 1 "2018-11-18" "perl v5.28.0" "User Contributed Perl Documentation"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -147,9 +147,11 @@ curam \-\- Provides maintenance functions for Arch Linux.
 .Ve
 .SH "OPTIONS"
 .IX Header "OPTIONS"
-.Vb 3
+.Vb 5
 \&  \-h|\-\-help = This usage.
 \&  \-\-force = Don\*(Aqt prompt if outstanding system errors found in systemctl
+\&  \-\-media = Include backup of media directory
+\&  \-\-home = Include backup of home directory
 \&  \-t|\-\-task = one of [news upgrade clean errors backup restore]
 .Ve
 .SH "DESCRIPTION"
@@ -181,15 +183,35 @@ Locate, report, and remove any broken symlinks in the system.
 The system logs are mined for errors with \fBjournalctl \-p 3 \-xb\fR
 .Sp
 System daemon launch failures shown with \fBsystemctl \-\-failed\fR
-.IP "\fB\-t|\-\-task backup\fR" 4
-.IX Item "-t|--task backup"
-\&\s-1OS,\s0 user home, and media rsync backup to \fB\f(CB$BACKUP_LOCATION\fB/backups/current\fR
+.IP "\fB\-t|\-\-task backup\fR [\-\-home[\-only]] [\-\-media[\-only]] [\-\-force]" 4
+.IX Item "-t|--task backup [--home[-only]] [--media[-only]] [--force]"
+\&\s-1OS\s0 rsync backup to \fB\f(CB$STORAGE\fB/backups/current\fR
 .Sp
-\&.tar.gz snapshot of current, saved to \fB\f(CB$BACKUP_LOCATION\fB/backups/tarballs\fR
+\&.tar.gz snapshot of current, saved to \fB\f(CB$STORAGE\fB/backups/tarballs\fR
 .Sp
 S3 sync snapshots to s3://$BUCKET, using \fB\f(CB$DEFAULT_USER\fB\fR \fB~/.aws/credentials\fR
 .Sp
-Run as root user, preserves permissions of files, and media.
+\&\fB\f(CB$DEFAULT_USER\fB\fR home rsync backup to \fB\f(CB$EXTERNAL\fB/home/$DEFAULT_USER\fR
+.Sp
+media rsync backup to \fB\f(CB$EXTERNAL\fB/media\fR
+.Sp
+Run as root user, preserves permissions of files and media.
+.Sp
+Assumes that you (would want to) store \s-1OS\s0 backup and media on some internal \s-1HDD\s0
+.Sp
+Assumes cloud media backup better for an \fB\f(CB$EXTERNAL\fB\fR \s-1HDD\s0 than the cloud.
+.Sp
+For example:
+.Sp
+/storage
+/storage/backups
+/storage/backups/current
+/storage/backups/tarballs
+/storage/media
+.Sp
+/external
+/external/media
+/external/home/$DEFAULT_USER
 .IP "\fB\-t|\-\-task restore\fR" 4
 .IX Item "-t|--task restore"
 Rsync restore of \fB\f(CB$BACKUP_LOCATION\fB/backups/current\fR backup in \fB\-\-dry\-run\fR

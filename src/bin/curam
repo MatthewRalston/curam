@@ -22,6 +22,8 @@ curam -- Provides maintenance functions for Arch Linux.
 
   -h|--help = This usage.
   --force = Don't prompt if outstanding system errors found in systemctl
+  --media = Include backup of media directory
+  --home = Include backup of home directory
   -t|--task = one of [news upgrade clean errors backup restore]
 
 =head1 DESCRIPTION
@@ -58,15 +60,35 @@ The system logs are mined for errors with B<journalctl -p 3 -xb>
 
 System daemon launch failures shown with B<systemctl --failed>
 
-=item B<-t|--task backup>
+=item B<-t|--task backup> [--home[-only]] [--media[-only]] [--force]
 
-OS, user home, and media rsync backup to B<$BACKUP_LOCATION/backups/current>
+OS rsync backup to B<$STORAGE/backups/current>
 
-.tar.gz snapshot of current, saved to B<$BACKUP_LOCATION/backups/tarballs>
+.tar.gz snapshot of current, saved to B<$STORAGE/backups/tarballs>
 
 S3 sync snapshots to s3://$BUCKET, using B<$DEFAULT_USER> B<~/.aws/credentials>
 
-Run as root user, preserves permissions of files, and media.
+B<$DEFAULT_USER> home rsync backup to B<$EXTERNAL/home/$DEFAULT_USER>
+
+media rsync backup to B<$EXTERNAL/media>
+
+Run as root user, preserves permissions of files and media.
+
+Assumes that you (would want to) store OS backup and media on some internal HDD
+
+Assumes cloud media backup better for an B<$EXTERNAL> HDD than the cloud.
+
+For example:
+
+/storage
+/storage/backups
+/storage/backups/current
+/storage/backups/tarballs
+/storage/media
+
+/external
+/external/media
+/external/home/$DEFAULT_USER
 
 =item B<-t|--task restore>
 
@@ -187,7 +209,10 @@ HELP=0
 if [[ $EUID -ne 0 ]]; then export USER=$(whoami); else export USER=$DEFAULT_USER; fi
 if [[ $EUID -ne 0 ]]; then export GROUP=$(id -gn); else export GROUP=$(id -gn $DEFAULT_USER); fi
 FORCE=0 # This variable controls behavior of forcing system upgrade instead of prompting in the case of system backup
-# script resides in bin, configs in src/bin/../etc/curam/
+HOME_BACKUP=0 # This variable controls behavior of home directory backup
+MEDIA_BACKUP=0 # This variable controls behavior of media directory backup
+OS_BACKUP=1 # This variable controls behavior OS backup
+
 
 
 # Absolute path to installed script directory
@@ -253,7 +278,7 @@ fetch_warnings() {
     if [[ "$alerts" == 1 ]]; then
 	echo "\n\nWARNING: This upgrade requires out-of-the-ordinary user intervention for system upgrade" >&2
 	echo "Re-run this command after resolving the above issue(s)" >&2
-	exit 1
+	return 1
     else
 	echo "...Check complete! No warnings found!" >&2
 	return 0
@@ -440,21 +465,21 @@ os_backup() {
 	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for os backup. Exiting" >&2; exit 1; fi
 	if [ -z ${GROUP+x} ]; then echo "The default groupname 'GROUP' was not set for os backup. Exiting" >&2; exit 1; fi
 	echo "Creating OS backup..." >&2
-	os_excludes=$(echo "${OS_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
-	cmd="rsync -aAXHS --info=progress2 --exclude={$os_excludes} / $STORAGE/backups/current/"
+	os_excludes=$(echo "${OS_EXCLUDES[*]}" | awk -v OFS=',' -v q='' '{$1=$1; print q $0 q}')
+	cmd="rsync -ahAXHS --info=progress2 --exclude={$os_excludes} / $STORAGE/backups/current/"
 	echo $cmd >&2
 	eval $cmd
 	DATE=$(date +"%Y%m%d_%H%M")
-	tarball=$STORAGE/backups/tarballs/backups-$DATE.tar.gz
+	tarball=$STORAGE/backups/tarballs/backup-$DATE.tar.gz
 	echo "Archiving 'current' snapshot..." >&2
-	cmd="tar -xattrs -czvf $tarball $STORAGE/backups/current/"
+	cmd="tar --xattrs -czvf $tarball $STORAGE/backups/current/"
 	
 	echo $cmd >&2
 	eval $cmd
 	chown $USER:$GROUP $tarball
 	echo "Syncing to S3..." >&2
-	su -l $USER -c "/usr/bin/aws s3 sync $STORAGE/backups/tarballs/ s3://$BUCKET --metadata Backups=Arch"
-	echo "\n\nOS Backup complete!" >&2
+	su -l $DEFAULT_USER -c "/usr/bin/aws s3 sync $STORAGE/backups/tarballs/ s3://$BUCKET --metadata Backups=Arch"
+	if [ $? -eq 0 ]; then echo "OS Backup complete!" >&2; fi
     fi
 }
 
@@ -466,13 +491,20 @@ home_backup() {
 	if [ -z ${HOME_EXCLUDES+x} ]; then echo "The list of excludes 'HOME_EXCLUDES' for home backup rsync was not set. Exiting" >&2; exit 1; fi
 	if [ -z ${EXTERNAL+x} ]; then echo "The bulk storage location 'STORAGE' was not set for home backup. Exiting" >&2; exit 1; fi
 	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for home backup. Exiting" >&2; exit 1; fi
+	if [ ! -d /home/$DEFAULT_USER ]; then echo "The home directory '/home/$DEFAULT_USER' was not a directory. Exiting" >&2; exit 1; fi
+	if [ ! -d $EXTERNAL/home ]; then echo "The bulk storage location '$EXTERNAL/home' was not a directory" >&2; exit 1; fi
+	home_excludes=$(echo "${HOME_EXCLUDES[*]}" | awk -v OFS=',' -v q='' '{$1=$1; print q $0 q}')
+	if [ ${#HOME_EXCLUDES[@]} -eq 0 ]; then
+	    EXCLUDES=''
+	else
+	    EXCLUDES=" --excludes={$home_excludes}"
+	fi
 
 	echo "Creating home backup..." >&2
-	home_excludes=$(echo "${HOME_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
-	cmd="rsync -aAXHS --info=progress2 --exclude={$home_excludes} /home/$USER $EXTERNAL/home/"
+	cmd="/bin/rsync -ahAXHS --info=progress2$EXCLUDES /home/$DEFAULT_USER $EXTERNAL/home"
 	echo $cmd >&2
-	su -l $USER -c $cmd
-	echo "\n\nHome backup complete!" >&2
+	su -l $DEFAULT_USER -c '$cmd'
+	if [ $? -eq 0 ]; then echo "Home backup complete!" >&2; fi
     fi
 }
 
@@ -481,17 +513,22 @@ media_backup() {
 	echo "Media backup must be run as root. It sets priveleges for '$USER' appropriately" >&2
 	exit 1
     else
-	if [ -z ${MEDIA_EXCLUDES+x} ]; then echo "The list of excludes 'HOME_EXCLUDES' for media backup rsync was not set. Exiting" >&2; exit 1; fi
-	if [ -z ${EXTERNAL+x} ]; then echo "The bulk storage location 'STORAGE' was not set for media backup. Exiting" >&2; exit 1; fi
-	if [ -z ${USER+x} ]; then echo "The default username 'USER' was not set for media backup. Exiting" >&2; exit 1; fi
+	if [ -z ${DEFAULT_USER+x} ]; then echo "The default username 'USER' was not set for media backup. Exiting" >&2; exit 1; fi
 	if [ -z ${STORAGE+x} ]; then echo "The bulk storage location 'STORAGE' was not set for media backup. Exiting" >&2; exit 1; fi
-
-	echo "Creating media backup..." >&2
-	media_excludes=$(echo "${MEDIA_EXCLUDES[*]}" | awk -v OFS='","' -v q='"' '{$1=$1; print q $0 q}')
-	cmd="rsync -aAXv --info=progress2 --excludes={$media_excludes} $STORAGE/media $EXTERNAL/media"
+	if [ -z ${EXTERNAL+x} ]; then echo "The bulk storage location 'STORAGE' was not set for media backup. Exiting" >&2; exit 1; fi
+	if [ ! -d $STORAGE/media ]; then echo "The bulk storage location '$STORAGE/media' was not a directory" >&2; exit 1; fi
+	if [ ! -d $EXTERNAL/media ]; then echo "The bulk storage location '$EXTERNAL/media' was not a directory" >&2; exit 1; fi
+	echo "Creating media backup as user '$DEFAULT_USER'..." >&2
+	media_excludes=$(echo "${MEDIA_EXCLUDES[*]}" | awk -v OFS=',' -v q='"' '{$1=$1; print q $0 q}')
+	if [ ${#MEDIA_EXCLUDES[@]} -eq 0 ]; then
+	    EXCLUDES=''
+	else
+	    EXCLUDES=" --excludes={$media_excludes}"
+	fi
+	cmd="/bin/rsync -ahAXHS --info=progress2$EXCLUDES $STORAGE/media $EXTERNAL"
 	echo $cmd >&2
-	su -l $USER -c $cmd
-	echo "\n\nMedia backup complete!" >&2
+	su -l $DEFAULT_USER -c '$cmd'
+	if [ $? -eq 0 ]; then echo "Media backup complete!" >&2; fi
     fi
 }
 
@@ -524,12 +561,19 @@ fetch_news() {
 system_upgrade() {
     update_mirrorlist
     fetch_warnings
-    upgrade_system
-    rebuild_aur
-    remove_orphaned
-    remove_dropped
-    handle_pacfiles
-    upgrade_warnings
+    if [ $? -eq 0 ]; then
+	read -r -p "Do you want to continue system upgrade process or exit to read the news? [y/N]"
+	if [[ "$REPLY" == "y" ]]; then
+	    upgrade_system
+	    rebuild_aur
+	    remove_orphaned
+	    remove_dropped
+	    handle_pacfiles
+	    upgrade_warnings
+	else
+	    exit 1
+	fi
+    fi
 }
 
 system_clean() {
@@ -550,19 +594,23 @@ system_errors() {
 backup_system() {
     if [[ $EUID -ne 0 ]];
     then
-	exec sudo /bin/bash "$0" "$@"
-    else
-	echo "Setting default user to 'matt'" >&2
-    fi
-    system_clean
-    failed_services
-    if [ $? -ne 0 ] && [ $FORCE -eq 0 ]; then
-	# Errors were found during system_errors, in the absence of the force flag, exit
+	echo "You will need root priveleges to perform system backup. Exiting." >&2
 	exit 1
+    else
+	echo "Setting default user to '$DEFAULT_USER'" >&2
     fi
-    os_backup
-    home_backup
-    media_backup
+
+    if [ $OS_BACKUP -eq 1 ]; then
+	system_clean
+	failed_services
+	if [ $? -ne 0 ] && [ $FORCE -eq 0 ]; then
+	    # Errors were found during system_errors, in the absence of the force flag, exit
+	    exit 1
+	fi
+	os_backup
+    fi
+    if [ $HOME_BACKUP -eq 1 ]; then home_backup; fi
+    if [ $MEDIA_BACKUP -eq 1 ]; then media_backup; fi
 
 }
 
@@ -572,7 +620,7 @@ restore_system() {
     then
 	exec sudo /bin/bash "$0" "$@"
     else
-	echo "Setting default user to 'matt'" >&2
+	echo "Setting default user to '$DEFAULT_USER'" >&2
     fi
     execute_restore
 }
@@ -583,10 +631,9 @@ script_exit() {
 }
 
 
-
 if [ $# -eq 0 ] # Print the help message if no arguments are provided
 then
-    HELP=1
+    echo "No options provided, check the manpage with '-h'." >&2
 fi
 
 
@@ -595,7 +642,7 @@ fi
 #######################################################################
 
 
-if [[ $# > 0 ]]; then
+while [[ $# > 0 ]]; do
     key="$1"
     case $key in
 	-h|--help)
@@ -609,7 +656,25 @@ if [[ $# > 0 ]]; then
 
 	--force)
 	FORCE=1
-	;;    
+	;;
+
+	--home-only)
+	export HOME_BACKUP=1
+	export OS_BACKUP=0
+	;;
+
+	--media-only)
+	export MEDIA_BACKUP=1
+	export OS_BACKUP=0
+	;;
+
+	--home)
+	export HOME_BACKUP=1
+	;;
+
+	--media)
+	export MEDIA_BACKUP=1
+	;;
 
 	*)
 	echo "Unknown option: $key" >&2
@@ -617,7 +682,7 @@ if [[ $# > 0 ]]; then
 	;;
     esac
     shift
-fi
+done
 
 if [ $HELP == 1 ]; then
     man $MANPAGE
@@ -642,10 +707,30 @@ else
     if [[ -z ${BUCKET} ]] && [[ $(/usr//bin/aws s3 ls s3://$BUCKET 2>/dev/null) ]]; then echo "The S3 bucket for snapshots 'BUCKET' was not set or does not exist." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
     if [[ -z ${DEFAULT_USER} ]] && [[ $(id -u $DEFAULT_USER 2> /dev/null) ]]; then echo "The default user 'DEFAULT_USER' was not set or does not exist." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
     if [[ -z ${AUR_DIR} ]] || [[ -d $AUR_DIR ]]; then echo "The Arch package rebuild directory 'AUR_DIR' was not set or already exists." >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-    if [[ -z ${OS_EXCLUDES[*]+x} ]] && [[ ${#OS_EXCLUDES[@]} -ne 0 ]]; then echo "The list of rsync excludes 'OS_EXCLUDES' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-    if [[ -z ${HOME_EXCLUDES[*]+x} ]] && [[ ${#HOME_EXCLUDES[@]} -ne 0 ]]; then echo "The list of rsync excludes 'HOME_EXCLUDES' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-    if [[ -z ${MEDIA_EXCLUDES[*]+x} ]] && [[ ${#MEDIA_EXCLUDES[@]} -ne 0 ]]; then echo "The list of rsync excludes 'MEDIA_EXCLUDES' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
-    if [[ -z ${SYMLINKS_CHECK[*]+x} ]] && [[ ${#SYMLINKS_CHECK[@]} -ne 0 ]]; then echo "The list of directories to search for broken symlinks, 'SYMLINKS_CHECK' was not set" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
+    
+    if [[ -z ${OS_EXCLUDES[*]+x} ]] || [[ ${#OS_EXCLUDES[@]} -eq 0 ]]; then
+	echo "The list of rsync excludes 'OS_EXCLUDES' was not set or was empty" >&2;
+	echo "OS_EXCLUDES is mandatory" >&2
+	echo "Run '-t config' to print configuration." >&2
+	echo "Edit etc/curam/curam.conf to continue. Exiting" >&2
+	exit 1
+    fi
+    if [[ -z ${HOME_EXCLUDES[*]+x} ]] || [[ ${#HOME_EXCLUDES[@]} -eq 0 ]]; then
+	echo "The list of rsync excludes 'HOME_EXCLUDES' was not set or was empty" >&2	
+	echo "Excluding directories for sync is highly recommended." >&2
+	if [ $FORCE -eq 0 ]; then
+	    read -r -p "Are you sure you want to continue? [y/N]"
+	    if [[ "$REPLY" != "y" ]]; then
+		exit 1
+	    fi
+	fi
+    fi
+    
+    if [[ -z ${MEDIA_EXCLUDES[*]+x} ]] || [[ ${#MEDIA_EXCLUDES[@]} -eq 0 ]]; then
+	echo "The list of rsync excludes 'MEDIA_EXCLUDES' was not set or was empty" >&2;
+	echo "Excluding directories from media backup is optional." >&2
+    fi
+    if [[ -z ${SYMLINKS_CHECK[*]+x} ]] || [[ ${#SYMLINKS_CHECK[@]} -eq 0 ]]; then echo "The list of directories to search for broken symlinks, 'SYMLINKS_CHECK' was not set or was empty" >&2; echo "SYMLINKS_CHECK is mandatory" >&2; echo "Run '-t config' to print configuration." >&2; echo "Edit etc/curam/curam.conf to continue. Exiting" >&2; exit 1; fi
 
 
     case $TASK in
