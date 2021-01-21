@@ -42,7 +42,7 @@ Fetches news about Arch Linux packages.
 
 Begins by updating the mirrorlist and fetching warnings/news since last upgrade.
 
-Full system upgrade B<pacman -Syu> (B<yaourt -Syu> if available)
+Full system upgrade B<pacman -Syu> (B<yay -Syu> if available)
 
 Package library rebuild, remove orphaned/dropped packages.
 
@@ -209,7 +209,7 @@ HELP=0
 if [[ $EUID -ne 0 ]]; then export USER=$(whoami); else export USER=$DEFAULT_USER; fi
 if [[ $EUID -ne 0 ]]; then export GROUP=$(id -gn); else export GROUP=$(id -gn $DEFAULT_USER); fi
 FORCE=0 # This variable controls behavior of forcing system upgrade instead of prompting in the case of system backup
-HOME_BACKUP=0 # This variable controls behavior of home directory backup
+HOME_BACKUP=1 # This variable controls behavior of home directory backup
 MEDIA_BACKUP=0 # This variable controls behavior of media directory backup
 OS_BACKUP=1 # This variable controls behavior OS backup
 
@@ -449,8 +449,8 @@ journal_errors() {
 upgrade_system() {
     echo "Performing full system upgrade..." >&2
     pacman -Syu
-    if [ -x "$(yaourt --version)" ]; then
-	yaourt -Syu
+    if [ -x "$(yay --version)" ]; then
+	yay -Syu
     fi
 }
 
@@ -497,14 +497,27 @@ home_backup() {
 	if [ ${#HOME_EXCLUDES[@]} -eq 0 ]; then
 	    EXCLUDES=''
 	else
-	    EXCLUDES=" --excludes={$home_excludes}"
+	    EXCLUDES=" --exclude={$home_excludes}"
 	fi
 
-	echo "Creating home backup..." >&2
-	cmd="/bin/rsync -ahAXHS --info=progress2$EXCLUDES /home/$DEFAULT_USER $EXTERNAL/home"
+	echo "Creating home backups..." >&2
+	echo "Backing up to external drive..." >&2
+	cmd="rsync -ahAXHS --info=progress2$EXCLUDES /home/$DEFAULT_USER $EXTERNAL/home"
 	echo $cmd >&2
-	su -l $DEFAULT_USER -c '$cmd'
-	if [ $? -eq 0 ]; then echo "Home backup complete!" >&2; fi
+	#su -l -c "$cmd" $DEFAULT_USER
+	external_backup=0 # FIXME
+	cmd="rsync -ahAXHS --info=progress2$EXCLUDES /home/$DEFAULT_USER $STORAGE/backups/current/home"
+	echo $cmd >&2
+	su -c "$cmd" $DEFAULT_USER
+	current_backup=$?
+	
+	if [[ $external_backup -eq 0 ]] && [[ $current_backup -eq 0 ]]; then
+	    echo "External: $external_backup, Current: $current_backup" >&2
+	    echo "Home backup complete!" >&2
+	else
+	    echo "Home backup failed!" >&2
+	    exit 1
+	fi
     fi
 }
 
@@ -523,11 +536,11 @@ media_backup() {
 	if [ ${#MEDIA_EXCLUDES[@]} -eq 0 ]; then
 	    EXCLUDES=''
 	else
-	    EXCLUDES=" --excludes={$media_excludes}"
+	    EXCLUDES=" --exclude={$media_excludes}"
 	fi
-	cmd="/bin/rsync -ahAXHS --info=progress2$EXCLUDES $STORAGE/media $EXTERNAL"
+	cmd="rsync -ahAXHS --info=progress2$EXCLUDES $STORAGE/media $EXTERNAL"
 	echo $cmd >&2
-	su -l $DEFAULT_USER -c '$cmd'
+	su -l -c "$cmd" $DEFAULT_USER
 	if [ $? -eq 0 ]; then echo "Media backup complete!" >&2; fi
     fi
 }
@@ -599,7 +612,8 @@ backup_system() {
     else
 	echo "Setting default user to '$DEFAULT_USER'" >&2
     fi
-
+    if [ $HOME_BACKUP -eq 1 ]; then home_backup; fi
+    if [ $MEDIA_BACKUP -eq 1 ]; then media_backup; fi
     if [ $OS_BACKUP -eq 1 ]; then
 	system_clean
 	failed_services
@@ -609,8 +623,6 @@ backup_system() {
 	fi
 	os_backup
     fi
-    if [ $HOME_BACKUP -eq 1 ]; then home_backup; fi
-    if [ $MEDIA_BACKUP -eq 1 ]; then media_backup; fi
 
 }
 

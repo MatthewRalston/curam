@@ -1,7 +1,3 @@
-/home/matt/.local/share/Steam
-/home/matt/.local/share/akonadi
-/home/matt/.cache
-/home/matt/ncbi
 /home/matt/.config/a2j
 /home/matt/.config/akonadi
 /home/matt/.config/akonadi_akonotes_resource_0rc
