@@ -296,40 +296,47 @@ aur_setup() {
     if [[ ! -d "$AUR_DIR" ]]; then
 	mkdir "$AUR_DIR"
     fi
-    chgrp nobody "$AUR_DIR"
+    chgrp matt "$AUR_DIR"
     chmod g+ws "$AUR_DIR"
     setfacl -d --set u::rwx,g::rx,o::rx "$AUR_DIR"
     setfacl -m u::rwx,g::rwx,o::- "$AUR_DIR"
     echo "AUR build directory setup complete!" >&2
+    echo >&2
+
 }
 
 rebuild_aur() {
-    if sudo -u nobody bash -c "[[ -w $AUR_DIR ]]"; then
+    if sudo -u matt bash -c "[[ -w $AUR_DIR ]]"; then
 	echo "Rebuilding AUR packages..." >&2
+	echo >&2
+
 	if [[ -n "$(/bin/ls -A $AUR_DIR)" ]]; then
-	    starting_dir="$(pwd)"
-	    for aur_pkg in $AUR_DIR/*/; do
-		if [[ -d "$aur_pkg" ]]; then
-		    if sudo -u nobody bash -c "[[ ! -w $aur_pkg ]]"; then
-			chmod -R g+w "$aur_pkg"
-		    fi
-		    cd "$aur_pkg"
-		    git pull origin master
-		    source PKGBUILD
-		    pacman -S --needed --asdeps "${depends[@]}" "${makedepends[@]}" --noconfirm
-		    sudo -u nobody makepkg -fc --noconfirm
-		    pacman -U "$(sudo -u nobody makepkg --packagelist)" --noconfirm
-		fi
-	    done
-	    cd $starting_dir
-	    echo "\n\nFinished rebuilding AUR packages." >&2
-	    echo >&2
-	    echo "Remember to rm -rf $AUR_DIR    !!!" >&2
-	    echo >&2
-	else
 	    echo "...No AUR packages in '$AUR_DIR'" >&2
-	    exit 1
+	    echo >&2
+	    echo "Sourcing from system default '$AUR_DEFAULT'"
+	    echo >&2
+	    cp -r $YAY_DEFAULT/* $AUR_DIR
 	fi
+	starting_dir="$(pwd)"
+	for aur_pkg in $AUR_DIR/*/; do
+	    if [[ -d "$aur_pkg" ]]; then
+		if sudo -u matt bash -c "[[ ! -w $aur_pkg ]]"; then
+		    chmod -R g+w "$aur_pkg"
+		fi
+		cd "$aur_pkg"
+		git pull origin master
+		source PKGBUILD
+		pacman -S --needed --asdeps "${depends[@]}" "${makedepends[@]}" --noconfirm
+		sudo -u matt makepkg -fc --noconfirm
+		pacman -U "$(sudo -u nobody makepkg --packagelist)" --noconfirm
+	    fi
+	done
+	cd $starting_dir
+	echo "\n\nFinished rebuilding AUR packages." >&2
+	echo >&2
+	echo "Remember to rm -rf $AUR_DIR    !!!" >&2
+	echo >&2
+
     else
 	echo "AUR package directory not set up" >&2
 	aur_setup
@@ -466,7 +473,7 @@ os_backup() {
 	if [ -z ${GROUP+x} ]; then echo "The default groupname 'GROUP' was not set for os backup. Exiting" >&2; exit 1; fi
 	echo "Creating OS backup..." >&2
 	os_excludes=$(echo "${OS_EXCLUDES[*]}" | awk -v OFS=',' -v q='' '{$1=$1; print q $0 q}')
-	cmd="rsync -ahAXHS --info=progress2 --exclude={$os_excludes} / $STORAGE/backups/current/"
+	cmd="rsync -LahAXHS --info=progress2 --exclude={$os_excludes} / $STORAGE/backups/current/"
 	echo $cmd >&2
 	eval $cmd
 	DATE=$(date +"%Y%m%d_%H%M")
@@ -494,19 +501,14 @@ home_backup() {
 	if [ ! -d /home/$DEFAULT_USER ]; then echo "The home directory '/home/$DEFAULT_USER' was not a directory. Exiting" >&2; exit 1; fi
 	if [ ! -d $EXTERNAL/home ]; then echo "The bulk storage location '$EXTERNAL/home' was not a directory" >&2; exit 1; fi
 	home_excludes=$(echo "${HOME_EXCLUDES[*]}" | awk -v OFS=',' -v q='' '{$1=$1; print q $0 q}')
-	if [ ${#HOME_EXCLUDES[@]} -eq 0 ]; then
-	    EXCLUDES=''
-	else
-	    EXCLUDES=" --exclude={$home_excludes}"
-	fi
 
 	echo "Creating home backups..." >&2
 	echo "Backing up to external drive..." >&2
-	cmd="rsync -ahAXHS --info=progress2$EXCLUDES /home/$DEFAULT_USER $EXTERNAL/home"
+	cmd="rsync -LahAXHS --info=progress2 --excludes={$home_excludes} /home/$DEFAULT_USER $EXTERNAL/home"
 	echo $cmd >&2
 	#su -l -c "$cmd" $DEFAULT_USER
 	external_backup=0 # FIXME
-	cmd="rsync -ahAXHS --info=progress2$EXCLUDES /home/$DEFAULT_USER $STORAGE/backups/current/home"
+	cmd="rsync -LahAXHS --info=progress2 --exclude={$home_excludes} /home/$DEFAULT_USER $STORAGE/backups/current/home"
 	echo $cmd >&2
 	su -c "$cmd" $DEFAULT_USER
 	current_backup=$?
@@ -533,12 +535,8 @@ media_backup() {
 	if [ ! -d $EXTERNAL/media ]; then echo "The bulk storage location '$EXTERNAL/media' was not a directory" >&2; exit 1; fi
 	echo "Creating media backup as user '$DEFAULT_USER'..." >&2
 	media_excludes=$(echo "${MEDIA_EXCLUDES[*]}" | awk -v OFS=',' -v q='"' '{$1=$1; print q $0 q}')
-	if [ ${#MEDIA_EXCLUDES[@]} -eq 0 ]; then
-	    EXCLUDES=''
-	else
-	    EXCLUDES=" --exclude={$media_excludes}"
-	fi
-	cmd="rsync -ahAXHS --info=progress2$EXCLUDES $STORAGE/media $EXTERNAL"
+
+	cmd="rsync -LahAXHS --info=progress2 --exclude={$media_excludes} $STORAGE/media $EXTERNAL"
 	echo $cmd >&2
 	su -l -c "$cmd" $DEFAULT_USER
 	if [ $? -eq 0 ]; then echo "Media backup complete!" >&2; fi
